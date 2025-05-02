@@ -1,87 +1,93 @@
+import Foundation
 import ARKit
 import AVFoundation
-import Foundation
-import SwiftUI
-import UnityFramework
+import UIKit
+import RealityKit
 
-// Declared in C# as: static extern void GetMainCameraFrame(string name);
-@_cdecl("StartVisionProMainCameraCapture")
-func startVisionProMainCameraCapture() {
-    print("############ GetMainCameraFrame")
+// MARK: - C# Callbacks
+typealias CameraCallback = @convention(c) (UnsafePointer<CChar>) -> Void
+typealias QRCodeCallback = @convention(c) (UnsafePointer<CChar>) -> Void
 
+var cameraCallback: CameraCallback?
+var qrCodeCallback: QRCodeCallback?
+
+@_cdecl("SetCameraCallback")
+func setCameraCallback(_ callback: @escaping CameraCallback) {
+    cameraCallback = callback
+}
+
+@_cdecl("SetQRCodeCallback")
+func setQRCodeCallback(_ callback: @escaping QRCodeCallback) {
+    qrCodeCallback = callback
+}
+
+// MARK: - Camera Feed
+@_cdecl("StartCameraFeed")
+func startCameraFeed() {
     Task {
-        await startCameraFeed()
+        await startCameraCapture()
     }
 }
 
-// Start the main camera feed
-var lastCalledTime: Date?
-func startCameraFeed() async {
+var lastCameraTime: Date?
+
+func startCameraCapture() async {
     let formats = CameraVideoFormat.supportedVideoFormats(for: .main, cameraPositions: [.left])
-    let arKitSession = ARKitSession()
-    let authResult = await arKitSession.queryAuthorization(for: [.cameraAccess])
-    print(authResult)
-    let cameraTracking = CameraFrameProvider()
-    do { try await arKitSession.run([cameraTracking]) } catch { return }
+    let session = ARKitSession()
+    _ = await session.queryAuthorization(for: [.cameraAccess])
+    
+    let cameraProvider = CameraFrameProvider()
+    try? await session.run([cameraProvider])
 
-    // Then receive the new camera frame:
-    for await i in cameraTracking.cameraFrameUpdates(
-        for: .supportedVideoFormats(for: .main, cameraPositions: [.left]).first!)!
-    {
-        let imageBuffer: CVPixelBuffer = i.primarySample.pixelBuffer
-        let currentTime = Date()
+    guard let format = formats.first else { return }
 
-        // Skip if the last call was less than X second ago
-        let skipSeconds = 0.1
-        if lastCalledTime == nil || currentTime.timeIntervalSince(lastCalledTime!) >= skipSeconds {
-            sendPixelBufferToUnity(imageBuffer)
-            lastCalledTime = currentTime
+    for await update in cameraProvider.cameraFrameUpdates(for: format)! {
+        let pixelBuffer = update.primarySample.pixelBuffer
+        let now = Date()
+        if lastCameraTime == nil || now.timeIntervalSince(lastCameraTime!) > 0.1 {
+            sendCameraBufferToUnity(pixelBuffer)
+            lastCameraTime = now
         }
     }
 }
 
-// Send the pixel buffer to Unity
-func sendPixelBufferToUnity(_ pixelBuffer: CVPixelBuffer) {
-    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+func sendCameraBufferToUnity(_ buffer: CVPixelBuffer) {
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
 
-    // Convert CVPixelBuffer to UIImage
-    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+    let ciImage = CIImage(cvPixelBuffer: buffer)
     let context = CIContext()
     guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
+
     let uiImage = UIImage(cgImage: cgImage)
+    guard let imageData = uiImage.jpegData(compressionQuality: 1.0) else { return }
 
-    // Convert UIImage to Data.
-    guard let imageData = uiImage.jpegData(compressionQuality: 1.0) else {
-        return
+    let base64 = imageData.base64EncodedString()
+    base64.withCString {
+        cameraCallback?($0)
     }
-
-    // Base64 encoding of Data.
-    let base64String = imageData.base64EncodedString()
-
-    CallCSharpCallbackOfCameraAccess(base64String)
 }
 
-
-typealias CallbackDelegateTypeOfCameraAccess = @convention(c) (UnsafePointer<CChar>) -> Void
-var sCallbackDelegateOfCameraAccess: CallbackDelegateTypeOfCameraAccess? = nil
-
-// Declared in C# as: static extern void SetNativeCallback(CallbackDelegate callback);
-@_cdecl("SetNativeCallbackOfCameraAccess")
-func setNativeCallbackOfCameraAccess(_ delegate: CallbackDelegateTypeOfCameraAccess)
-{
-    print("############ SET NATIVE CALLBACK")
-    sCallbackDelegateOfCameraAccess = delegate
+// MARK: - QR Code Detection
+@_cdecl("StartQRCodeDetection")
+func startQRCodeDetection() {
+    Task {
+        await detectBarcodes()
+    }
 }
 
-// This is a function for your own use from the enclosing Unity-VisionOS app, to call the delegate
-// from your own windows/views (HelloWorldContentView uses this)
-public func CallCSharpCallbackOfCameraAccess(_ str: String)
-{
-    if (sCallbackDelegateOfCameraAccess == nil) {
-        return
-    }
+func detectBarcodes() async {
+    guard BarcodeDetectionProvider.isSupported else { return }
 
-    str.withCString {
-        sCallbackDelegateOfCameraAccess!($0)
+    let barcodeProvider = BarcodeDetectionProvider(symbologies: [.qr])
+    let session = ARKitSession()
+    try? await session.run([barcodeProvider])
+
+    for await update in barcodeProvider.anchorUpdates where update.event == .added {
+        if let payload = update.anchor.payloadString {
+            payload.withCString {
+                qrCodeCallback?($0)
+            }
+        }
     }
 }

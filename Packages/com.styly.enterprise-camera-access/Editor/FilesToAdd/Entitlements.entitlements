@@ -4,5 +4,7 @@
 <dict>
 	<key>com.apple.developer.arkit.main-camera-access.allow</key>
 	<true/>
+	<key>com.apple.developer.arkit.barcode-detection.allow</key>
+	<true/>
 </dict>
 </plist>
