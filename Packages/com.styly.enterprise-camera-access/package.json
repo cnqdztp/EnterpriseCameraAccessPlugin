@@ -1,5 +1,5 @@
 {
-  "name": "com.styly.enterprise-camera-access",
+  "name": "com.styly.enterprise-access",
   "version": "0.1.1",
   "displayName": "Enterprise Camera Access Plugin for Vision Pro and Pico",
   "unity": "2022.3",
@@ -20,11 +20,6 @@
       "displayName": "Vision Pro Samples",
       "description": "Sample for Vision Pro Main Camera Access with the Enterprise API",
       "path": "Samples~/CameraAccess_VisionPro"
-    },
-    {
-      "displayName": "Pico Samples",
-      "description": "Sample for Pico Camera Frame Access with PICO Unity Integration SDK.",
-      "path": "Samples~/CameraAccess_Pico"
     }
   ]
 }
